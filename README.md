@@ -92,8 +92,15 @@ After running the script, you will get:
 - `results.csv` helps identify which drivers finished the race.
 - `races.csv` helps find the race we want to study.
 - A stint starts at the first lap of the race and after each pit stop. The
-  first model uses lap/driver/stint information; the second adds tire age and
-  tire age squared.
+  first model uses race lap, one-hot encoded driver, stint number, and laps
+  remaining as a simple fuel-load/race-progress proxy; the second adds tire
+  age and tire age squared.
+- Driver IDs are treated as categories rather than numeric measurements. The
+  same one-hot encoded feature columns are aligned between training, testing,
+  and plotting.
+- Complete stints remain separated chronologically for evaluation. This
+  preserves the assignment's stint-based split while the `laps_remaining`
+  feature helps the models account for fuel burn and race progress.
 
 ## Important reminder
 

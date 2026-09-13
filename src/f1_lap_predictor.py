@@ -23,11 +23,20 @@ MAX_DRIVERS = 10
 def check_required_files():
     required = ["lap_times.csv", "pit_stops.csv", "results.csv", "races.csv"]
     missing = [name for name in required if not (DATA_DIR / name).exists()]
+    empty = [
+        name for name in required
+        if (DATA_DIR / name).exists() and (DATA_DIR / name).stat().st_size == 0
+    ]
 
     if missing:
         raise FileNotFoundError(
             "Missing required CSV files in the data folder. "
             f"Please add: {', '.join(missing)}"
+        )
+    if empty:
+        raise ValueError(
+            "These required CSV files are empty: "
+            f"{', '.join(empty)}"
         )
 
 
@@ -135,12 +144,13 @@ def build_stint_features(lap_times, pit_stops, race_id, driver_ids):
             new_row = row.to_dict()
             new_row["stint_order"] = current_stint
             new_row["tire_age"] = tire_age
-            new_row["lap_number_in_stint"] = int(row["lap"]) - last_stop
 
             rows.append(new_row)
 
     enriched = pd.DataFrame(rows)
     enriched["lap_number_in_stint"] = enriched.groupby(["driverId", "stint_order"])["lap"].rank(method="first").astype(int)
+    total_laps = enriched["lap"].max()
+    enriched["laps_remaining"] = total_laps - enriched["lap"]
 
     return enriched
 
@@ -179,13 +189,24 @@ def split_by_stint(enriched):
 
 
 def build_features(df, include_tire_age=False):
-    features = df[["lap", "driverId", "stint_order"]].copy()
+    features = df[["lap", "driverId", "stint_order", "laps_remaining"]].copy()
+    features["driverId"] = features["driverId"].astype(str)
+    features = pd.get_dummies(
+        features,
+        columns=["driverId"],
+        dtype=float,
+    )
 
     if include_tire_age:
         features["tire_age"] = df["tire_age"]
         features["tire_age_sq"] = df["tire_age"] ** 2
 
     return features
+
+
+def align_features(features, columns):
+    """Use the training feature columns for every later prediction."""
+    return features.reindex(columns=columns, fill_value=0)
 
 
 def evaluate_model(y_true, y_pred):
@@ -195,7 +216,13 @@ def evaluate_model(y_true, y_pred):
     }
 
 
-def plot_one_stint(test_df, baseline_model, tire_model):
+def plot_one_stint(
+    test_df,
+    baseline_model,
+    tire_model,
+    baseline_columns,
+    tire_columns,
+):
     plot_driver = test_df["driverId"].mode().iloc[0]
     plot_stint = test_df[test_df["driverId"] == plot_driver]["stint_order"].min()
 
@@ -207,8 +234,14 @@ def plot_one_stint(test_df, baseline_model, tire_model):
     if plot_df.empty:
         raise RuntimeError("No test stint data available for plotting.")
 
-    baseline_features = build_features(plot_df, include_tire_age=False)
-    tire_features = build_features(plot_df, include_tire_age=True)
+    baseline_features = align_features(
+        build_features(plot_df, include_tire_age=False),
+        baseline_columns,
+    )
+    tire_features = align_features(
+        build_features(plot_df, include_tire_age=True),
+        tire_columns,
+    )
 
     plot_df["baseline_pred"] = baseline_model.predict(baseline_features)
     plot_df["tire_pred"] = tire_model.predict(tire_features)
@@ -252,7 +285,10 @@ def main():
 
     print("\nTraining baseline model...")
     baseline_X_train = build_features(train_df, include_tire_age=False)
-    baseline_X_test = build_features(test_df, include_tire_age=False)
+    baseline_X_test = align_features(
+        build_features(test_df, include_tire_age=False),
+        baseline_X_train.columns,
+    )
     y_train = train_df["milliseconds"]
     y_test = test_df["milliseconds"]
 
@@ -264,7 +300,10 @@ def main():
 
     print("\nTraining tire-age model...")
     tire_X_train = build_features(train_df, include_tire_age=True)
-    tire_X_test = build_features(test_df, include_tire_age=True)
+    tire_X_test = align_features(
+        build_features(test_df, include_tire_age=True),
+        tire_X_train.columns,
+    )
 
     tire_model = RandomForestRegressor(
         n_estimators=300,
@@ -290,7 +329,13 @@ def main():
     metrics.to_csv(OUTPUT_DIR / "model_metrics.csv", index=False)
     print(f"\nSaved metrics to: {OUTPUT_DIR / 'model_metrics.csv'}")
 
-    plot_one_stint(test_df, baseline_model, tire_model)
+    plot_one_stint(
+        test_df,
+        baseline_model,
+        tire_model,
+        baseline_X_train.columns,
+        tire_X_train.columns,
+    )
 
     print("\nDone. Open outputs/predicted_vs_actual_stint.png to inspect the plot.")
 
