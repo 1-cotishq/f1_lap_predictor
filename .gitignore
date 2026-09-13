@@ -5,9 +5,3 @@ __pycache__/
 # Virtual environments
 .venv/
 .venv-1/
-
-# Data files
-/data/*.csv
-
-# Outputs
-outputs/
